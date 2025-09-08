@@ -103,11 +103,15 @@ def clean_download_all(
     download_folder = Path(folder).expanduser()
     download_folder.mkdir(parents=True, exist_ok=True)
     
-    # Get speeches  
-    fetch_size = max_downloads if max_downloads else 1000
+    # Get speeches - API limit is 530, so use safe default
+    fetch_size = max_downloads if max_downloads else 530
     console.print("📜 Loading your transcript library...")
     
-    all_speeches = auth.get_speeches_with_size(page_size=fetch_size)
+    # Use direct API call instead of broken wrapper
+    response = auth.otter.get_speeches(page_size=fetch_size)
+    data = response.get('data', {})
+    all_speeches = data.get('speeches', [])
+    
     console.print(f"✅ Found {len(all_speeches)} speeches in your account")
     
     # Stats
