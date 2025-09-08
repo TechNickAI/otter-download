@@ -83,7 +83,7 @@ def download_speech(auth: OtterAuth, speech: Dict[str, Any], download_folder: Pa
         
         return True
     else:
-        console.print(f"❌ API error {response.status_code} for {speech['title']}")
+        console.print(f"❌ Download failed: {speech['title']} (server error {response.status_code})")
         return False
 
 
@@ -105,10 +105,10 @@ def clean_download_all(
     
     # Get speeches  
     fetch_size = max_downloads if max_downloads else 1000
-    console.print(f"📜 Fetching {fetch_size} speeches...")
+    console.print("📜 Loading your transcript library...")
     
     all_speeches = auth.get_speeches_with_size(page_size=fetch_size)
-    console.print(f"✅ Got {len(all_speeches)} speeches")
+    console.print(f"✅ Found {len(all_speeches)} speeches in your account")
     
     # Stats
     stats = {'total': len(all_speeches), 'downloaded': 0, 'skipped': 0, 'errors': 0, 'filtered': 0}
@@ -137,7 +137,7 @@ def clean_download_all(
         
         for speech in all_speeches:
             if max_downloads and stats['downloaded'] >= max_downloads:
-                console.print(f"🛑 Reached max: {max_downloads}")
+                console.print(f"🛑 Downloaded maximum limit ({max_downloads} files)")
                 break
             
             title = speech['title'] or 'Untitled'
@@ -155,7 +155,7 @@ def clean_download_all(
             transcript = speech.get('transcript', '') or speech.get('summary', '')
             if transcript and len(transcript) < min_transcript_length:
                 stats['filtered'] += 1
-                console.print(f"⏭️  Filtered: {title} - {len(transcript)} chars")
+                console.print(f"⏭️ Skipped: {title} (too short - {len(transcript)} chars)")
                 progress.advance(task)
                 continue
             

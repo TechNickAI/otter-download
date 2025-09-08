@@ -67,9 +67,9 @@ def login():
                 console.print()
                 
                 # Get and display speeches
-                console.print("[bold cyan]📜 Fetching ALL your speeches...[/bold cyan]")
+                console.print("[bold cyan]📜 Loading your transcript library...[/bold cyan]")
                 
-                with console.status("[bold blue]Loading speeches with pagination...[/bold blue]", spinner="dots"):
+                with console.status("[bold blue]Getting speech list...[/bold blue]", spinner="dots"):
                     speeches = auth.get_all_speeches()
                 
                 if speeches:
@@ -201,7 +201,7 @@ def download(folder, format, overwrite, sleep, min_length, max_count, force, use
         f"   • Total speeches: {stats['total']}\n"
         f"   • Downloaded: [green]{stats['downloaded']}[/green]\n"
         f"   • Skipped: [yellow]{stats['skipped']}[/yellow]\n"
-        f"   • Filtered out: [blue]{stats['filtered']}[/blue]\n"
+        f"   • Skipped (too short): [blue]{stats['filtered']}[/blue]\n"
         f"   • Errors: [red]{stats['errors']}[/red]\n\n"
         f"📁 Files saved to: [cyan]{folder}[/cyan]",
         border_style="green",
