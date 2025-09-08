@@ -103,8 +103,8 @@ def clean_download_all(
     download_folder = Path(folder).expanduser()
     download_folder.mkdir(parents=True, exist_ok=True)
     
-    # Get speeches - API limit is 530, so use safe default
-    fetch_size = max_downloads if max_downloads else 530
+    # Get speeches  
+    fetch_size = max_downloads if max_downloads else 1000
     console.print("📜 Loading your transcript library...")
     
     # Use direct API call instead of broken wrapper
