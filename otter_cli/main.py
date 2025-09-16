@@ -6,6 +6,7 @@ Beautiful command-line interface for managing Otter.ai transcripts
 
 import getpass
 import sys
+import logging
 from typing import Optional
 
 import click
@@ -126,8 +127,16 @@ def _display_speeches(speeches):
 @click.option('--force', is_flag=True, help='Force full re-download, ignore existing files')
 @click.option('--username', '-u', help='Otter.ai username/email')
 @click.option('--password', '-p', help='Otter.ai password')
-def download(folder, format, overwrite, sleep, min_length, max_count, force, username, password):
+@click.option('--verbosity', '-v', is_flag=True, help='Enable verbose debugging output')
+def download(folder, format, overwrite, sleep, min_length, max_count, force, username, password, verbosity):
     """📥 Download all your Otter.ai transcripts"""
+    
+    # Set up logging level based on verbosity flag
+    if verbosity:
+        logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        console.print("🔍 [bold yellow]Verbose debugging enabled[/bold yellow]")
+    else:
+        logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
     console.print(Panel.fit(
         "[bold blue]📥 Otter AI Transcript Downloader[/bold blue]\n"

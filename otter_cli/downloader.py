@@ -4,6 +4,10 @@ Clean, simple downloader - no defensive programming bullshit
 
 import os
 import time
+import logging
+import json
+import yaml
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from rich.console import Console
@@ -14,6 +18,57 @@ from .auth import OtterAuth
 from .utils import slugify
 
 console = Console()
+logger = logging.getLogger(__name__)
+
+
+def generate_frontmatter(speech: Dict[str, Any]) -> str:
+    """Generate YAML frontmatter from speech metadata"""
+    # Convert timestamps to ISO format
+    def timestamp_to_iso(timestamp):
+        if timestamp:
+            return datetime.fromtimestamp(timestamp).isoformat() + 'Z'
+        return None
+    
+    # Extract speaker information
+    speakers = []
+    speaker_distribution = {}
+    if speech.get('speakers'):
+        for speaker in speech['speakers']:
+            speaker_name = speaker.get('speaker_name', 'Unknown')
+            speakers.append(speaker_name)
+            speaker_distribution[speaker_name] = speaker_distribution.get(speaker_name, 0) + 1
+    
+    # Extract topics from word clouds
+    topics = []
+    if speech.get('word_clouds'):
+        topics = [cloud['word'] for cloud in speech['word_clouds'][:10]]  # Top 10 topics
+    
+    # Build frontmatter data
+    frontmatter_data = {
+        'id': speech.get('speech_id', ''),
+        'otid': speech.get('otid', ''),
+        'date': timestamp_to_iso(speech.get('created_at')),
+        'start_time': timestamp_to_iso(speech.get('start_time')),
+        'end_time': timestamp_to_iso(speech.get('end_time')),
+        'title': speech.get('title', 'Untitled'),
+        'speakers': speakers,
+        'speaker_analysis': {
+            'total_speakers': len(speakers),
+            'speaker_distribution': speaker_distribution
+        },
+        'topics': topics,
+        'summary': speech.get('summary', ''),
+        'is_meeting_series': speech.get('is_meeting_series', False),
+        'has_images': speech.get('hasPhotos', 0) > 0,
+        'images_count': speech.get('hasPhotos', 0),
+        'source': 'otter',
+        'data_source': 'api',
+        'transcript_updated_at': timestamp_to_iso(speech.get('transcript_updated_at'))
+    }
+    
+    # Convert to YAML and wrap in frontmatter markers
+    yaml_content = yaml.dump(frontmatter_data, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    return f"---\n{yaml_content}---\n\n"
 
 
 def get_clean_filename(speech: Dict[str, Any], format: str = "txt") -> str:
@@ -74,9 +129,13 @@ def download_speech(auth: OtterAuth, speech: Dict[str, Any], download_folder: Pa
     response = auth.otter._session.post(download_url, params=payload, headers=headers, data=data)
     
     if response.status_code == 200:
-        # Write content directly to target file
-        with open(filepath, 'wb') as f:
-            f.write(response.content)
+        # Generate frontmatter
+        frontmatter = generate_frontmatter(speech)
+        
+        # Write content with frontmatter
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(frontmatter)
+            f.write(response.content.decode('utf-8'))
         
         # Set timestamp
         set_file_timestamp(filepath, speech)
@@ -103,76 +162,158 @@ def clean_download_all(
     download_folder = Path(folder).expanduser()
     download_folder.mkdir(parents=True, exist_ok=True)
     
-    # Get speeches  
-    fetch_size = max_downloads if max_downloads else 1000
+    # Get speeches - use efficient method based on max_downloads
     console.print("📜 Loading your transcript library...")
     
-    # Use direct API call instead of broken wrapper
-    response = auth.otter.get_speeches(page_size=fetch_size)
-    data = response.get('data', {})
-    all_speeches = data.get('speeches', [])
-    
-    console.print(f"✅ Found {len(all_speeches)} speeches in your account")
-    
-    # Stats
-    stats = {'total': len(all_speeches), 'downloaded': 0, 'skipped': 0, 'errors': 0, 'filtered': 0}
-    
-    console.print()
-    console.print(Panel.fit(
-        f"🚀 Processing {len(all_speeches)} speeches\n"
-        f"📁 Format: {format.upper()}\n" 
-        f"⏱️  Sleep: {sleep_seconds}s\n"
-        f"📏 Min length: {min_transcript_length} chars\n"
-        f"📊 Max downloads: {max_downloads or 'All'}",
-        border_style="green"
-    ))
-    
-    # Process speeches
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        TimeRemainingColumn(),
-        console=console
-    ) as progress:
+    if max_downloads and max_downloads <= 100:
+        # For small counts, use direct API call with page_size to avoid timeouts
+        logger.info(f"🔍 Fetching {max_downloads} speeches directly...")
+        response = auth.otter.get_speeches(page_size=max_downloads)
+        if response and 'data' in response:
+            all_speeches = response['data'].get('speeches', [])
+        else:
+            all_speeches = []
         
-        task = progress.add_task("Processing speeches...", total=len(all_speeches))
+        logger.info(f"🎙️ Retrieved {len(all_speeches)} speeches from API")
         
-        for speech in all_speeches:
-            if max_downloads and stats['downloaded'] >= max_downloads:
-                console.print(f"🛑 Downloaded maximum limit ({max_downloads} files)")
-                break
+        if all_speeches and len(all_speeches) > 0:
+            logger.info(f"📝 First speech title: {all_speeches[0].get('title', 'No title')}")
+        
+        console.print(f"✅ Found {len(all_speeches)} speeches in your account")
+        
+        # Stats
+        stats = {'total': len(all_speeches), 'downloaded': 0, 'skipped': 0, 'errors': 0, 'filtered': 0}
+        
+        console.print()
+        console.print(Panel.fit(
+            f"🚀 Processing {len(all_speeches)} speeches\n"
+            f"📁 Format: {format.upper()}\n" 
+            f"⏱️  Sleep: {sleep_seconds}s\n"
+            f"📏 Min length: {min_transcript_length} chars\n"
+            f"📊 Max downloads: {max_downloads or 'All'}",
+            border_style="green"
+        ))
+        
+        # Process speeches directly for small counts
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
+            console=console
+        ) as progress:
             
-            title = speech['title'] or 'Untitled'
-            speech_id = speech['speech_id']  # Use clean speech_id for duplicate detection
+            task = progress.add_task("Processing speeches...", total=len(all_speeches))
             
-            progress.update(task, description=f"Processing: {title[:40]}...")
-            
-            # Already downloaded?
-            if speech_already_downloaded(speech_id, download_folder, format) and not overwrite:
-                stats['skipped'] += 1
+            for speech in all_speeches:
+                if max_downloads and stats['downloaded'] >= max_downloads:
+                    console.print(f"🛑 Downloaded maximum limit ({max_downloads} files)")
+                    break
+                
+                title = speech['title'] or 'Untitled'
+                speech_id = speech['speech_id']
+                
+                progress.update(task, description=f"Processing: {title[:40]}...")
+                
+                # Already downloaded?
+                if speech_already_downloaded(speech_id, download_folder, format) and not overwrite:
+                    stats['skipped'] += 1
+                    progress.advance(task)
+                    continue
+                
+                # Too short?
+                transcript = speech.get('transcript', '') or speech.get('summary', '')
+                if transcript and len(transcript) < min_transcript_length:
+                    stats['filtered'] += 1
+                    console.print(f"⏭️ Skipped: {title} (too short - {len(transcript)} chars)")
+                    progress.advance(task)
+                    continue
+                
+                # Download it
+                if download_speech(auth, speech, download_folder, format):
+                    stats['downloaded'] += 1
+                    console.print(f"✅ {title}")
+                else:
+                    stats['errors'] += 1
+                
                 progress.advance(task)
-                continue
+                
+                if sleep_seconds > 0:
+                    time.sleep(sleep_seconds)
+    
+    else:
+        # For large counts or no limit, use batch processing
+        logger.info("🔍 Using batch processing for efficient memory usage...")
+        
+        # Stats
+        stats = {'total': 0, 'downloaded': 0, 'skipped': 0, 'errors': 0, 'filtered': 0}
+        
+        console.print()
+        console.print(Panel.fit(
+            f"🚀 Processing speeches in batches of 50\n"
+            f"📁 Format: {format.upper()}\n" 
+            f"⏱️  Sleep: {sleep_seconds}s\n"
+            f"📏 Min length: {min_transcript_length} chars\n"
+            f"📊 Max downloads: {max_downloads or 'All'}",
+            border_style="green"
+        ))
+        
+        # Process speeches in batches
+        for batch_num, batch_speeches in enumerate(auth.get_speeches_batch(batch_size=50), 1):
+            stats['total'] += len(batch_speeches)
             
-            # Too short?
-            transcript = speech.get('transcript', '') or speech.get('summary', '')
-            if transcript and len(transcript) < min_transcript_length:
-                stats['filtered'] += 1
-                console.print(f"⏭️ Skipped: {title} (too short - {len(transcript)} chars)")
-                progress.advance(task)
-                continue
+            console.print(f"📦 Processing batch {batch_num} ({len(batch_speeches)} speeches)...")
             
-            # Download it
-            if download_speech(auth, speech, download_folder, format):
-                stats['downloaded'] += 1
-                console.print(f"✅ {title}")
-            else:
-                stats['errors'] += 1
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeRemainingColumn(),
+                console=console
+            ) as progress:
+                
+                task = progress.add_task(f"Batch {batch_num}...", total=len(batch_speeches))
+                
+                for speech in batch_speeches:
+                    if max_downloads and stats['downloaded'] >= max_downloads:
+                        console.print(f"🛑 Downloaded maximum limit ({max_downloads} files)")
+                        return stats
+                    
+                    title = speech['title'] or 'Untitled'
+                    speech_id = speech['speech_id']
+                    
+                    progress.update(task, description=f"Processing: {title[:40]}...")
+                    
+                    # Already downloaded?
+                    if speech_already_downloaded(speech_id, download_folder, format) and not overwrite:
+                        stats['skipped'] += 1
+                        progress.advance(task)
+                        continue
+                    
+                    # Too short?
+                    transcript = speech.get('transcript', '') or speech.get('summary', '')
+                    if transcript and len(transcript) < min_transcript_length:
+                        stats['filtered'] += 1
+                        console.print(f"⏭️ Skipped: {title} (too short - {len(transcript)} chars)")
+                        progress.advance(task)
+                        continue
+                    
+                    # Download it
+                    if download_speech(auth, speech, download_folder, format):
+                        stats['downloaded'] += 1
+                        console.print(f"✅ {title}")
+                    else:
+                        stats['errors'] += 1
+                    
+                    progress.advance(task)
+                    
+                    if sleep_seconds > 0:
+                        time.sleep(sleep_seconds)
             
-            progress.advance(task)
-            
-            if sleep_seconds > 0:
-                time.sleep(sleep_seconds)
+            console.print(f"✅ Completed batch {batch_num}: {stats['downloaded']} total downloads so far")
+        
+        console.print(f"🎉 All batches completed! Total speeches processed: {stats['total']}")
     
     return stats
