@@ -248,9 +248,57 @@ class OtterAuth:
             logger.exception("Error fetching all speeches - general error")
             raise Exception(f"Error fetching all speeches: {str(e)}")
     
+    def get_speeches_direct(self, page_size: int = 50, folder: int = 0, source: str = "owned"):
+        """
+        Get speeches using direct API calls, bypassing the broken otterai library
+        
+        Args:
+            page_size: Number of speeches to fetch (default: 50)
+            folder: Folder ID to search in  
+            source: Source type ("owned", "shared", etc.)
+            
+        Returns:
+            List[Dict]: List of speech dictionaries
+        """
+        if not self.authenticated or not self.otter:
+            raise Exception("Not authenticated. Please login first.")
+            
+        try:
+            params = {
+                'userid': self.otter._userid,
+                'folder': folder,
+                'page_size': page_size,
+                'source': source
+            }
+            
+            logger.info(f"📡 Direct API call: page_size={page_size}, folder={folder}, source={source}")
+            
+            response = self.otter._session.get(
+                'https://otter.ai/forward/api/v1/speeches', 
+                params=params
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"❌ API error: {response.status_code} - {response.text}")
+                raise Exception(f"API error: {response.status_code}")
+            
+            data = response.json()
+            speeches = data.get('speeches', [])
+            
+            logger.info(f"✅ Retrieved {len(speeches)} speeches via direct API")
+            return speeches
+            
+        except Exception as e:
+            logger.exception("Error in direct API call")
+            raise Exception(f"Direct API call failed: {str(e)}")
+
     def get_speeches_batch(self, batch_size: int = 50, folder: int = 0, source: str = "owned"):
         """
-        Generator that yields batches of speeches for efficient processing
+        Generator that yields batches of speeches using proper pagination
+        
+        Uses the correct pagination parameters discovered from the live Otter website:
+        - last_load_ts: timestamp cursor for pagination
+        - modified_after: additional timestamp filter
         
         Args:
             batch_size: Number of speeches per batch (default: 50)
@@ -263,58 +311,87 @@ class OtterAuth:
         if not self.authenticated or not self.otter:
             raise Exception("Not authenticated. Please login first.")
             
-        page_count = 0
-        total_yielded = 0
-        
-        logger.info(f"🔄 Starting batch processing with batch_size={batch_size}, folder={folder}, source={source}")
+        logger.info(f"🔄 Starting proper pagination with batch_size={batch_size}")
         
         try:
+            batch_count = 0
+            total_yielded = 0
+            last_load_ts = None
+            modified_after = None
+            
             while True:
-                page_count += 1
-                logger.info(f"📄 Fetching batch {page_count} (size: {batch_size})...")
+                batch_count += 1
+                logger.info(f"📄 Fetching batch {batch_count} via paginated API...")
                 
-                # Get a batch of speeches with the specified batch size
-                response = self.otter.get_speeches(folder=folder, page_size=batch_size, source=source)
+                # Build parameters for proper pagination
+                params = {
+                    'userid': self.otter._userid,
+                    'folder': folder,
+                    'page_size': batch_size,
+                    'source': source
+                }
                 
-                if response is None or not isinstance(response, dict) or 'data' not in response:
-                    logger.warning(f"⚠️ Batch {page_count} has invalid response structure, stopping")
+                # Add pagination cursors if we have them
+                if last_load_ts is not None:
+                    params['last_load_ts'] = last_load_ts
+                if modified_after is not None:
+                    params['modified_after'] = modified_after
+                
+                logger.info(f"📡 API params: {params}")
+                
+                # Make API call
+                response = self.otter._session.get(
+                    'https://otter.ai/forward/api/v1/speeches', 
+                    params=params
+                )
+                
+                if response.status_code != 200:
+                    logger.error(f"❌ API error: {response.status_code} - {response.text}")
                     break
-                    
-                data = response['data']
                 
-                # Extract speeches from this batch
-                if isinstance(data, dict):
-                    batch_speeches = data.get('speeches', [])
-                    end_of_list = data.get('end_of_list', True)
-                    
-                    logger.info(f"🎙️ Batch {page_count}: {len(batch_speeches)} speeches, end_of_list={end_of_list}")
-                    
-                    if isinstance(batch_speeches, list) and len(batch_speeches) > 0:
-                        total_yielded += len(batch_speeches)
-                        logger.info(f"📈 Yielding batch of {len(batch_speeches)} speeches (total so far: {total_yielded})")
-                        yield batch_speeches
-                    
-                    # Check if we've reached the end
-                    if end_of_list or len(batch_speeches) == 0:
-                        logger.info(f"🏁 Reached end of list on batch {page_count}")
-                        break
-                        
-                    # Safety check to prevent infinite loops
-                    if page_count > 200:  # Max 10,000 speeches with batch_size=50
-                        logger.warning(f"⚠️  Safety limit reached: {page_count} batches, {total_yielded} speeches")
-                        break
-                else:
-                    logger.warning(f"⚠️ Batch {page_count} data is not a dict: {type(data)}")
+                data = response.json()
+                batch_speeches = data.get('speeches', [])
+                end_of_list = data.get('end_of_list', True)
+                new_last_load_ts = data.get('last_load_ts')
+                new_modified_after = data.get('last_modified_at')
+                
+                logger.info(f"🎙️ Batch {batch_count}: {len(batch_speeches)} speeches, end_of_list={end_of_list}")
+                logger.info(f"📊 Pagination cursors: last_load_ts={new_last_load_ts}, modified_after={new_modified_after}")
+                
+                if not batch_speeches or len(batch_speeches) == 0:
+                    logger.info(f"🏁 No more speeches in batch {batch_count}, stopping")
+                    break
+                
+                total_yielded += len(batch_speeches)
+                logger.info(f"📦 Yielding batch {batch_count}: {len(batch_speeches)} speeches (total so far: {total_yielded})")
+                yield batch_speeches
+                
+                # Update pagination cursors for next batch
+                if new_last_load_ts:
+                    last_load_ts = new_last_load_ts
+                if new_modified_after:
+                    modified_after = new_modified_after
+                
+                # Check if we've reached the end
+                if end_of_list:
+                    logger.info(f"🏁 Reached end_of_list on batch {batch_count}")
+                    break
+                
+                # If we got fewer speeches than requested, we've reached the end
+                if len(batch_speeches) < batch_size:
+                    logger.info(f"🏁 Reached end - got {len(batch_speeches)} < {batch_size} requested")
+                    break
+                
+                # Safety check to prevent infinite loops
+                if batch_count > 100:  # Max 5,000 speeches with batch_size=50
+                    logger.warning(f"⚠️  Safety limit reached: {batch_count} batches, {total_yielded} speeches")
                     break
             
-            logger.info(f"✅ Completed batch processing: {total_yielded} total speeches across {page_count} batches")
+            logger.info(f"✅ Completed pagination: {total_yielded} total speeches across {batch_count} batches")
                 
-        except OtterAIException as e:
-            logger.exception("Failed to fetch speech batches - OtterAI API error")
-            raise Exception(f"Failed to fetch speech batches: {str(e)}")
         except Exception as e:
-            logger.exception("Error fetching speech batches - general error")
-            raise Exception(f"Error fetching speech batches: {str(e)}")
+            logger.exception("Error in paginated batch processing")
+            raise Exception(f"Paginated batch processing failed: {str(e)}")
 
     def get_user_info(self) -> Dict[str, Any]:
         """

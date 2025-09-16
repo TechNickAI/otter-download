@@ -166,13 +166,9 @@ def clean_download_all(
     console.print("📜 Loading your transcript library...")
     
     if max_downloads and max_downloads <= 100:
-        # For small counts, use direct API call with page_size to avoid timeouts
-        logger.info(f"🔍 Fetching {max_downloads} speeches directly...")
-        response = auth.otter.get_speeches(page_size=max_downloads)
-        if response and 'data' in response:
-            all_speeches = response['data'].get('speeches', [])
-        else:
-            all_speeches = []
+        # For small counts, use direct API call to bypass broken otterai library
+        logger.info(f"🔍 Fetching {max_downloads} speeches via direct API...")
+        all_speeches = auth.get_speeches_direct(page_size=max_downloads)
         
         logger.info(f"🎙️ Retrieved {len(all_speeches)} speeches from API")
         
@@ -243,8 +239,8 @@ def clean_download_all(
                     time.sleep(sleep_seconds)
     
     else:
-        # For large counts or no limit, use batch processing
-        logger.info("🔍 Using batch processing for efficient memory usage...")
+        # For large counts or no limit, use proper batch processing with pagination
+        logger.info("🔍 Using batch processing with proper pagination...")
         
         # Stats
         stats = {'total': 0, 'downloaded': 0, 'skipped': 0, 'errors': 0, 'filtered': 0}
@@ -259,7 +255,7 @@ def clean_download_all(
             border_style="green"
         ))
         
-        # Process speeches in batches
+        # Process speeches in batches with proper pagination
         for batch_num, batch_speeches in enumerate(auth.get_speeches_batch(batch_size=50), 1):
             stats['total'] += len(batch_speeches)
             
