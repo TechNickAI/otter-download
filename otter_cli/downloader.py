@@ -7,6 +7,7 @@ import time
 import logging
 import json
 import yaml
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -71,17 +72,50 @@ def generate_frontmatter(speech: Dict[str, Any]) -> str:
     return f"---\n{yaml_content}---\n\n"
 
 
+def generate_speakers_part(speech: Dict[str, Any]) -> str:
+    """Generate the speakers part of the filename"""
+    speakers = speech.get('speakers', [])
+    
+    if not speakers or len(speakers) == 0:
+        return 'Me'
+    
+    if len(speakers) == 1:
+        return 'Me'
+    
+    if len(speakers) <= 3:
+        # Extract first names only
+        first_names = []
+        for speaker in speakers:
+            speaker_name = speaker.get('speaker_name', 'Unknown').strip()
+            if speaker_name:
+                # Get first name (everything before first space)
+                first_name = speaker_name.split()[0]
+                first_names.append(first_name)
+            else:
+                first_names.append('Unknown')
+        
+        return '-'.join(first_names)
+    
+    return 'Multiple'
+
+
 def get_clean_filename(speech: Dict[str, Any], format: str = "txt") -> str:
-    """Generate clean filename: Title_{speech_id}.format"""
+    """Generate clean filename: $title.speakers.$id.txt"""
     title = speech['title'] or 'Untitled'
     speech_id = speech['speech_id']  # Clean ID without underscores
-    slug = slugify(title, max_length=80)
-    return f"{slug}_{speech_id}.{format}"
+    
+    # Slugify title (no max_length limit as requested)
+    title_slug = slugify(title, max_length=999999)
+    
+    # Generate speakers part
+    speakers_part = generate_speakers_part(speech)
+    
+    return f"{title_slug}.{speakers_part}.{speech_id}.{format}"
 
 
 def speech_already_downloaded(speech_id: str, download_folder: Path, format: str = "txt") -> bool:
     """Check if speech already downloaded by looking for speech_id in filename"""
-    pattern = f"*_{speech_id}.{format}"
+    pattern = f"*.{speech_id}.{format}"
     matches = list(download_folder.glob(pattern))
     return len(matches) > 0
 
